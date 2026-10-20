@@ -1,0 +1,110 @@
+name: Publish HMCL Fork Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/fork-release.yml
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    if: github.repository == 'Iu-yang1/HMCL'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download pinned successful CI artifacts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          artifacts=(
+            "12258323721 HMCL-3.17.unofficial-3cb91d3.jar"
+            "12258218931 HMCL-3.17.unofficial-3cb91d3.exe"
+            "12259127716 HMCL-3.17.unofficial-3cb91d3.sh"
+            "12258997959 HMCL-3.17.unofficial-3cb91d3.deb"
+          )
+
+          for spec in "${artifacts[@]}"; do
+            read -r artifact_id filename <<< "$spec"
+            zip_path="$RUNNER_TEMP/artifact-$artifact_id.zip"
+            folder="$RUNNER_TEMP/artifact-$artifact_id"
+            mkdir -p "$folder"
+
+            curl --fail --location --silent --show-error --retry 3 \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "Accept: application/vnd.github+json" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" \
+              --output "$zip_path"
+
+            unzip -tq "$zip_path" > /dev/null
+            unzip -q "$zip_path" -d "$folder"
+            mapfile -d '' matches < <(find "$folder" -type f -name "$filename" -print0)
+            if [[ "${#matches[@]}" -ne 1 ]]; then
+              echo "::error::Expected exactly one $filename in artifact $artifact_id"
+              exit 1
+            fi
+            cp -- "${matches[0]}" "dist/$filename"
+          done
+
+          unzip -tq "dist/HMCL-3.17.unofficial-3cb91d3.jar" > /dev/null
+          (
+            cd dist
+            sha256sum HMCL-3.17.unofficial-3cb91d3.{jar,exe,sh,deb} > SHA256SUMS.txt
+          )
+
+          # Only report presence; never print a private credential.
+          if unzip -p "dist/HMCL-3.17.unofficial-3cb91d3.jar" assets/hmcl.properties \
+             | grep -qE '^hmcl\.curseforge\.apikey=.+$'; then
+            echo "::warning::A CurseForge API credential is embedded in the public release artifact."
+          else
+            echo "CurseForge API credential is empty or missing."
+          fi
+
+      - name: Create public pre-release from pinned artifacts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="fork-v3.17.unofficial-3cb91d3"
+          source_sha="3cb91d3001cbaf830bba60f2f93af7493efe5c3d"
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release $tag already exists. Refusing to overwrite."
+            exit 1
+          fi
+
+          cat > "$RUNNER_TEMP/RELEASE_NOTES.md" <<'NOTES'
+          ## HMCL independent fork — pre-release
+
+          Source commit: https://github.com/Iu-yang1/HMCL/commit/3cb91d3001cbaf830bba60f2f93af7493efe5c3d
+          Build: https://github.com/Iu-yang1/HMCL/actions/runs/39407378916/attempts/2
+
+          This is an **unofficial community fork**, not an official HMCL or CurseForge release.
+
+          - Mainland China game and add-on download UI is available again.
+          - Launcher self-update checking against the upstream distribution is disabled.
+          - Four downloadable binary formats: JAR, Windows EXE, SH, Debian DEB.
+          - SHA256SUMS.txt provides SHA-256 hashes for all published files.
+
+          **Credential notice:** Existing CI artifacts are being published with the repository owner's explicit authorization. The build may contain an embedded CurseForge API Key, which, if configured, is extractable from public clients. GitHub Secrets do not protect any Key once embedded into public artifacts. Rotate or revoke this Key if it should not be public.
+
+          **Authentication notice:** Successful CI compilation does not validate Microsoft/Xbox/Minecraft login. The earlier client logs contained HTTP 429 rate limiting and an XSTS authorization exception; those issues are not fixed in these artifacts.
+          NOTES
+
+          gh release create "$tag" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$source_sha" \
+            --title "HMCL Fork 3.17 unofficial (3cb91d3)" \
+            --notes-file "$RUNNER_TEMP/RELEASE_NOTES.md" \
+            --prerelease
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+            --json name,url,isPrerelease,tagName,assets
