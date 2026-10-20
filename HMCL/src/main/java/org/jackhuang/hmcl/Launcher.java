@@ -32,10 +32,10 @@ import javafx.scene.control.Alert;
 import javafx.scene.control.Alert.AlertType;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
-import javafx.stage.Screen;
-import javafx.stage.Stage;
 import javafx.stage.Window;
 import javafx.stage.WindowEvent;
+import javafx.stage.Screen;
+import javafx.stage.Stage;
 import javafx.util.Duration;
 import org.jackhuang.hmcl.game.HMCLCacheRepository;
 import org.jackhuang.hmcl.setting.*;
@@ -51,9 +51,11 @@ import org.jackhuang.hmcl.util.*;
 import org.jackhuang.hmcl.util.io.FileUtils;
 import org.jackhuang.hmcl.util.io.JarUtils;
 import org.jackhuang.hmcl.util.platform.*;
+import org.jackhuang.hmcl.util.platform.macos.LibSystem;
 import org.jackhuang.hmcl.util.platform.windows.Gdi32;
 import org.jackhuang.hmcl.util.platform.windows.Shell32;
 import org.jackhuang.hmcl.util.platform.windows.User32;
+import org.jackhuang.hmcl.util.platform.windows.WinReg;
 import org.jetbrains.annotations.Nullable;
 
 import javax.swing.*;
@@ -77,6 +79,7 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
@@ -90,6 +93,7 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 /// The main JavaFX application entry point.
 public final class Launcher extends Application {
     public static final CookieManager COOKIE_MANAGER = new CookieManager();
+
     /// Prevents cleanup and process termination from running more than once.
     private static final AtomicBoolean EXITING = new AtomicBoolean();
     /// Tracks diagnostic windows that already have a close handler during hidden-launcher shutdown.
@@ -337,6 +341,9 @@ public final class Launcher extends Application {
                 LOG.info("XDG Current Desktop: " + System.getenv("XDG_CURRENT_DESKTOP"));
             }
 
+            @Nullable Boolean isRoot = isRootUser();
+            LOG.info("Administrator User: " + (isRoot == null ? "Unknown" : isRoot.toString()));
+
             LOG.info("Zlib Compatible: " + ZlibUtils.IS_ZLIB_COMPATIBLE);
 
             Lang.thread(SystemInfo::initialize, "Detection System Information", true);
@@ -438,6 +445,9 @@ public final class Launcher extends Application {
         if (OperatingSystem.CURRENT_OS != OperatingSystem.WINDOWS)
             return;
         if (!NativeUtils.USE_JNA || Shell32.INSTANCE == null)
+            return;
+        @Nullable Path thisJar = JarUtils.thisJarPath();
+        if (thisJar == null || !Files.isRegularFile(thisJar) || !"exe".equalsIgnoreCase(FileUtils.getExtension(thisJar)))
             return;
 
         try {
@@ -643,6 +653,69 @@ public final class Launcher extends Application {
             }
         }
         EntryPoint.exit(1);
+    }
+
+    private static @Nullable Boolean isRootUser() {
+        switch (OperatingSystem.CURRENT_OS) {
+            case WINDOWS -> {
+                WinReg reg = WinReg.INSTANCE;
+
+                if (reg == null)
+                    return null;
+                try {
+                    return reg.exists(WinReg.HKEY.HKEY_USERS, "S-1-5-19");
+                } catch (Exception e) {
+                    LOG.warning("Failed to check Windows administrator privileges", e);
+                    return null;
+                }
+            }
+            case LINUX -> {
+                Path selfStatus = Paths.get("/proc/self/status");
+                if (Files.exists(selfStatus)) {
+                    try (var reader = Files.newBufferedReader(selfStatus)) {
+                        @Nullable String line;
+                        while ((line = reader.readLine()) != null) {
+                            if (line.startsWith("Uid:")) {
+                                String[] parts = line.split("\t");
+                                if (parts.length >= 3) {
+                                    String uid = parts[2].trim();
+                                    return "0".equals(uid);
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        LOG.warning("Failed to read " + selfStatus, e);
+                    }
+                }
+            }
+            case MACOS -> {
+                if (NativeUtils.USE_JNA) {
+                    LibSystem libSystem = LibSystem.INSTANCE;
+                    if (libSystem != null) {
+                        try {
+                            return libSystem.geteuid() == 0;
+                        } catch (Throwable e) {
+                            LOG.warning("Failed to check macOS root privileges", e);
+                            return null;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (OperatingSystem.CURRENT_OS.isUnixLike()) {
+            @Nullable Path id = SystemUtils.which("id");
+            if (id != null) {
+                try {
+                    return "0".equals(SystemUtils.run(id.toString(), "-u").trim());
+                } catch (Exception e) {
+                    LOG.warning("Failed to run id -u", e);
+                    return null;
+                }
+            }
+        }
+
+        return null;
     }
 
     public static final CrashReporter CRASH_REPORTER = new CrashReporter(true);
