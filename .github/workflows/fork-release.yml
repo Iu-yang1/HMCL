@@ -25,10 +25,10 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           artifacts=(
-            "12258323721 HMCL-3.17.unofficial-3cb91d3.jar"
-            "12258218931 HMCL-3.17.unofficial-3cb91d3.exe"
-            "12259127716 HMCL-3.17.unofficial-3cb91d3.sh"
-            "12258997959 HMCL-3.17.unofficial-3cb91d3.deb"
+            "12262135072 HMCL-3.17.unofficial-d2f0a57.jar"
+            "12262095276 HMCL-3.17.unofficial-d2f0a57.exe"
+            "12261331258 HMCL-3.17.unofficial-d2f0a57.sh"
+            "12262040433 HMCL-3.17.unofficial-d2f0a57.deb"
           )
 
           for spec in "${artifacts[@]}"; do
@@ -45,23 +45,23 @@ jobs:
             test -s "dist/$filename"
           done
 
-          unzip -tq "dist/HMCL-3.17.unofficial-3cb91d3.jar" > /dev/null
+          unzip -tq "dist/HMCL-3.17.unofficial-d2f0a57.jar" > /dev/null
           # Validate executable/script/package signatures without executing them.
-          [[ "$(head -c 2 dist/HMCL-3.17.unofficial-3cb91d3.exe | od -An -tx1 | tr -d ' \n')" == "4d5a" ]]
-          [[ "$(head -c 2 dist/HMCL-3.17.unofficial-3cb91d3.sh)" == "#!" ]]
-          ar t dist/HMCL-3.17.unofficial-3cb91d3.deb > /dev/null
+          [[ "$(head -c 2 dist/HMCL-3.17.unofficial-d2f0a57.exe | od -An -tx1 | tr -d ' \n')" == "4d5a" ]]
+          [[ "$(head -c 2 dist/HMCL-3.17.unofficial-d2f0a57.sh)" == "#!" ]]
+          ar t dist/HMCL-3.17.unofficial-d2f0a57.deb > /dev/null
           file dist/*
           (
             cd dist
-            sha256sum HMCL-3.17.unofficial-3cb91d3.{jar,exe,sh,deb} > SHA256SUMS.txt
+            sha256sum HMCL-3.17.unofficial-d2f0a57.{jar,exe,sh,deb} > SHA256SUMS.txt
           )
 
           # Only report presence; never print a private credential.
-          if unzip -p "dist/HMCL-3.17.unofficial-3cb91d3.jar" assets/hmcl.properties \
+          if unzip -p "dist/HMCL-3.17.unofficial-d2f0a57.jar" assets/hmcl.properties \
              | grep -qE '^hmcl\.curseforge\.apikey=.+$'; then
             echo "::warning::A CurseForge API credential is embedded in the public release artifact."
           else
-            echo "CurseForge API credential is empty or missing."
+            echo "::error::CurseForge API credential missing from intended release artifact."\n            exit 1
           fi
 
       - name: Create public pre-release from pinned artifacts
@@ -70,8 +70,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="fork-v3.17.unofficial-3cb91d3"
-          source_sha="3cb91d3001cbaf830bba60f2f93af7493efe5c3d"
+          tag="fork-v3.17.unofficial-d2f0a57"
+          source_sha="d2f0a5788b93d6a3c3b754133692377d3e71956c"
 
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "::error::Release $tag already exists. Refusing to overwrite."
@@ -81,10 +81,10 @@ jobs:
           cat > "$RUNNER_TEMP/RELEASE_NOTES.md" <<'NOTES'
           ## HMCL independent fork — pre-release
 
-          Source commit: https://github.com/Iu-yang1/HMCL/commit/3cb91d3001cbaf830bba60f2f93af7493efe5c3d
-          Build: https://github.com/Iu-yang1/HMCL/actions/runs/39407378916/attempts/2
+          Source commit: https://github.com/Iu-yang1/HMCL/commit/d2f0a5788b93d6a3c3b754133692377d3e71956c
+          Build: https://github.com/Iu-yang1/HMCL/actions/runs/39413490318/attempts/2
 
-          This is an **unofficial community fork**, not an official HMCL or CurseForge release.
+          This is an **unofficial community fork**, not an official HMCL or CurseForge release. This is a NEW Release, distinct from the earlier 3cb91d3 build.
 
           - Mainland China game and add-on download UI is available again.
           - Launcher self-update checking against the upstream distribution is disabled.
@@ -99,7 +99,7 @@ jobs:
           gh release create "$tag" dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$source_sha" \
-            --title "HMCL Fork 3.17 unofficial (3cb91d3)" \
+            --title "HMCL Fork 3.17 unofficial (d2f0a57 — CurseForge enabled)" \
             --notes-file "$RUNNER_TEMP/RELEASE_NOTES.md" \
             --prerelease
           gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
