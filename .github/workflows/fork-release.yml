@@ -33,32 +33,24 @@ jobs:
 
           for spec in "${artifacts[@]}"; do
             read -r artifact_id filename <<< "$spec"
-            zip_path="$RUNNER_TEMP/artifact-$artifact_id.zip"
-            folder="$RUNNER_TEMP/artifact-$artifact_id"
-            mkdir -p "$folder"
-
+            # CI uploaded artifacts with actions/upload-artifact@v7 archive: false.
+            # The artifact download endpoint therefore returns the original file
+            # bytes, not a ZIP wrapper: a JAR itself is already a ZIP archive.
             curl --fail --location --silent --show-error --retry 3 \
               --header "Authorization: Bearer $GH_TOKEN" \
               --header "Accept: application/vnd.github+json" \
               --header "X-GitHub-Api-Version: 2022-11-28" \
               "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" \
-              --output "$zip_path"
-
-            unzip -tq "$zip_path" > /dev/null
-            unzip -q "$zip_path" -d "$folder"
-            # upload-artifact@v7 may store a single file under a normalized
-            # internal path that differs from the artifact's display name.
-            mapfile -d '' matches < <(find "$folder" -type f -print0)
-            if [[ "${#matches[@]}" -ne 1 ]]; then
-              echo "::error::Expected one file in artifact $artifact_id, found ${#matches[@]}"
-              find "$folder" -maxdepth 4 -type f -printf '%P\n'
-              exit 1
-            fi
-            cp -- "${matches[0]}" "dist/$filename"
+              --output "dist/$filename"
             test -s "dist/$filename"
           done
 
           unzip -tq "dist/HMCL-3.17.unofficial-3cb91d3.jar" > /dev/null
+          # Validate executable/script/package signatures without executing them.
+          [[ "$(head -c 2 dist/HMCL-3.17.unofficial-3cb91d3.exe | od -An -tx1 | tr -d ' \n')" == "4d5a" ]]
+          [[ "$(head -c 2 dist/HMCL-3.17.unofficial-3cb91d3.sh)" == "#!" ]]
+          ar t dist/HMCL-3.17.unofficial-3cb91d3.deb > /dev/null
+          file dist/*
           (
             cd dist
             sha256sum HMCL-3.17.unofficial-3cb91d3.{jar,exe,sh,deb} > SHA256SUMS.txt
