@@ -20,7 +20,7 @@ package org.jackhuang.hmcl.ui.main;
 import com.jfoenix.controls.JFXPopup;
 import javafx.beans.property.ReadOnlyObjectProperty;
 import javafx.scene.layout.Region;
-import org.jackhuang.hmcl.game.GameInstanceID;
+import org.jackhuang.hmcl.game.GameProcessManager;
 import org.jackhuang.hmcl.game.HMCLGameInstance;
 import org.jackhuang.hmcl.game.ModpackHelper;
 import org.jackhuang.hmcl.setting.Accounts;
@@ -44,7 +44,6 @@ import org.jackhuang.hmcl.ui.instances.Instances;
 import org.jackhuang.hmcl.ui.nbt.NBTEditorPage;
 import org.jackhuang.hmcl.ui.nbt.NBTFileType;
 import org.jackhuang.hmcl.upgrade.UpdateChecker;
-import org.jackhuang.hmcl.util.Lang;
 import org.jackhuang.hmcl.util.StringUtils;
 import org.jackhuang.hmcl.util.io.FileUtils;
 import org.jackhuang.hmcl.util.platform.*;
@@ -126,11 +125,7 @@ public class RootPage extends DecoratorAnimatedPage implements DecoratorPage {
                     Instances.modifyGameSettings(instance);
                 }
             });
-            FXUtils.onScroll(gameListItem, getSkinnable().getMainPage().getInstances(), list -> {
-                @Nullable HMCLGameInstance currentGame = getSkinnable().getMainPage().getCurrentGame();
-                @Nullable GameInstanceID currentId = currentGame != null ? currentGame.getId() : null;
-                return Lang.indexWhere(list, instance -> instance.getId().equals(currentId));
-            }, instance -> instance.getRepository().setSelectedInstance(instance));
+            FXUtils.onScroll(gameListItem, getSkinnable().getMainPage()::selectAdjacentInstance);
             if (AnimationUtils.isAnimationEnabled()) {
                 FXUtils.prepareOnMouseEnter(gameListItem, Controllers::prepareGameInstancePage);
             }
@@ -153,6 +148,12 @@ public class RootPage extends DecoratorAnimatedPage implements DecoratorPage {
             }
 
             // fifth item in left sidebar
+            AdvancedListItem gameProcessItem = new AdvancedListItem();
+            gameProcessItem.setLeftIcon(SVG.TERMINAL);
+            gameProcessItem.titleProperty().bind(GameProcessManager.aliveProcessCount.asString(i18n("game.process") + " (%d)"));
+            gameProcessItem.setOnAction(e -> Controllers.navigate(Controllers.getGameProcessPage()));
+
+            // sixth item in left sidebar
             AdvancedListItem launcherSettingsItem = new AdvancedListItem();
             launcherSettingsItem.setLeftIcon(SVG.SETTINGS);
             launcherSettingsItem.setTitle(i18n("settings"));
@@ -164,7 +165,7 @@ public class RootPage extends DecoratorAnimatedPage implements DecoratorPage {
                 FXUtils.prepareOnMouseEnter(launcherSettingsItem, Controllers::prepareSettingsPage);
             }
 
-            // sixth item in left sidebar
+            // seventh item in left sidebar
             AdvancedListItem terracottaItem = new AdvancedListItem();
             terracottaItem.setLeftIcon(SVG.GRAPH2);
             terracottaItem.setTitle(i18n("terracotta"));
@@ -195,6 +196,7 @@ public class RootPage extends DecoratorAnimatedPage implements DecoratorPage {
                     .add(gameListItem)
                     .add(gameItem)
                     .add(downloadItem)
+                    .add(gameProcessItem)
                     .startCategory(i18n("settings.launcher.general").toUpperCase(Locale.ROOT))
                     .add(launcherSettingsItem)
                     .add(terracottaItem)

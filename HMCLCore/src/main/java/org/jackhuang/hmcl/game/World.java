@@ -179,6 +179,14 @@ public final class World {
         return null;
     }
 
+    public int getDataVersion() {
+        if (levelData.get("Data") instanceof CompoundTag data &&
+                data.get("DataVersion") instanceof IntTag dataVersionTag) {
+            return dataVersionTag.get();
+        }
+        return -1;
+    }
+
     public @Nullable Long getSeed() {
         // Valid after 1.16(20w20a)
         if (normalizedWorldGenSettingsData != null
@@ -228,12 +236,20 @@ public final class World {
         return getGameVersion() != null && getGameVersion().isAtLeast("1.13", "17w43a");
     }
 
+    public boolean supportStructures() {
+        return getGameVersion() != null && getGameVersion().isAtLeast("1.10", "16w20a");
+    }
+
     public boolean supportQuickPlay() {
         return getGameVersion() != null && getGameVersion().isAtLeast("1.20", "23w14a");
     }
 
     public static boolean supportQuickPlay(GameVersionNumber gameVersionNumber) {
         return gameVersionNumber != null && gameVersionNumber.isAtLeast("1.20", "23w14a");
+    }
+
+    public static boolean supportQueryArgServerAddress(GameVersionNumber gameVersionNumber) {
+        return gameVersionNumber != null && gameVersionNumber.compareTo("26.4-snapshot-1") >= 0;
     }
 
     private void loadAndCheckWorldData() throws IOException {

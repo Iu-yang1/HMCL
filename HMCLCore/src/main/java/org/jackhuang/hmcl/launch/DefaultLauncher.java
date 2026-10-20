@@ -281,6 +281,7 @@ public class DefaultLauncher extends Launcher {
             libraryClasspath.removeIf(c -> c.contains("2.9.4-nightly-20150209"));
             libraryClasspath.removeIf(c -> c.contains("platform-3.4.0"));
             libraryClasspath.removeIf(c -> c.contains("icu4j-core-mojang"));
+            libraryClasspath.removeIf(c -> c.contains("patchy-1.3.9"));
         }
 
         Path jar = instance.getInstanceJarFile();
@@ -374,12 +375,23 @@ public class DefaultLauncher extends Launcher {
                 ServerAddress parsed = ServerAddress.parse(address);
                 if (World.supportQuickPlay(GameVersionNumber.asGameVersion(gameVersion))) {
                     res.add("--quickPlayMultiplayer");
-                    res.add(parsed.port() >= 0 ? address : parsed.host() + ":25565");
+                    if (World.supportQueryArgServerAddress(GameVersionNumber.asGameVersion(gameVersion))) {
+                        res.add(parsed.toServerIp(true));
+                    } else {
+                        res.add(parsed.toServerIp(false));
+                        if (!parsed.queryProperties().isEmpty()) {
+                            LOG.warning("Ignore the query parameters in the server address.");
+                        }
+                    }
                 } else {
                     res.add("--server");
-                    res.add(parsed.host());
+                    res.add(parsed.hostAndPort().host());
                     res.add("--port");
-                    res.add(parsed.port() >= 0 ? String.valueOf(parsed.port()) : "25565");
+                    res.add(String.valueOf(parsed.hostAndPort().port()));
+
+                    if (!parsed.queryProperties().isEmpty()) {
+                        LOG.warning("Ignore the query parameters in the server address.");
+                    }
                 }
             } catch (IllegalArgumentException e) {
                 LOG.warning("Invalid server address: " + address, e);
