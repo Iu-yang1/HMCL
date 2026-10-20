@@ -26,6 +26,7 @@ import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.beans.binding.Bindings;
 import javafx.beans.value.ObservableBooleanValue;
+import javafx.event.EventHandler;
 import javafx.geometry.Rectangle2D;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Alert.AlertType;
@@ -33,6 +34,8 @@ import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
 import javafx.stage.Screen;
 import javafx.stage.Stage;
+import javafx.stage.Window;
+import javafx.stage.WindowEvent;
 import javafx.util.Duration;
 import org.jackhuang.hmcl.game.HMCLCacheRepository;
 import org.jackhuang.hmcl.setting.*;
@@ -40,17 +43,17 @@ import org.jackhuang.hmcl.task.AsyncTaskExecutor;
 import org.jackhuang.hmcl.task.Schedulers;
 import org.jackhuang.hmcl.ui.Controllers;
 import org.jackhuang.hmcl.ui.FXUtils;
+import org.jackhuang.hmcl.ui.GameCrashWindow;
+import org.jackhuang.hmcl.ui.LogWindow;
 import org.jackhuang.hmcl.ui.animation.AnimationUtils;
 import org.jackhuang.hmcl.upgrade.UpdateHandler;
 import org.jackhuang.hmcl.util.*;
 import org.jackhuang.hmcl.util.io.FileUtils;
 import org.jackhuang.hmcl.util.io.JarUtils;
 import org.jackhuang.hmcl.util.platform.*;
-import org.jackhuang.hmcl.util.platform.macos.LibSystem;
 import org.jackhuang.hmcl.util.platform.windows.Gdi32;
 import org.jackhuang.hmcl.util.platform.windows.Shell32;
 import org.jackhuang.hmcl.util.platform.windows.User32;
-import org.jackhuang.hmcl.util.platform.windows.WinReg;
 import org.jetbrains.annotations.Nullable;
 
 import javax.swing.*;
@@ -69,10 +72,13 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.text.DecimalFormat;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.TimeUnit;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 
 import static org.jackhuang.hmcl.setting.SettingsManager.settings;
@@ -84,6 +90,10 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 /// The main JavaFX application entry point.
 public final class Launcher extends Application {
     public static final CookieManager COOKIE_MANAGER = new CookieManager();
+    /// Prevents cleanup and process termination from running more than once.
+    private static final AtomicBoolean EXITING = new AtomicBoolean();
+    /// Tracks diagnostic windows that already have a close handler during hidden-launcher shutdown.
+    private static final Set<Window> DIAGNOSTIC_WINDOWS_AWAITING_CLOSE = Collections.newSetFromMap(new IdentityHashMap<>());
 
     @Override
     public void start(Stage primaryStage) {
@@ -327,9 +337,6 @@ public final class Launcher extends Application {
                 LOG.info("XDG Current Desktop: " + System.getenv("XDG_CURRENT_DESKTOP"));
             }
 
-            @Nullable Boolean isRoot = isRootUser();
-            LOG.info("Administrator User: " + (isRoot == null ? "Unknown" : isRoot.toString()));
-
             LOG.info("Zlib Compatible: " + ZlibUtils.IS_ZLIB_COMPATIBLE);
 
             Lang.thread(SystemInfo::initialize, "Detection System Information", true);
@@ -354,30 +361,76 @@ public final class Launcher extends Application {
         }
     }
 
+    /// Stops the launcher after an explicit user-requested close.
     public static void stopApplication() {
         LOG.info("Stopping application.\n" + StringUtils.getStackTrace(Thread.currentThread().getStackTrace()));
 
-        runInFX(() -> {
-            if (Controllers.getStage() == null)
-                return;
-            Controllers.getStage().close();
-            Schedulers.shutdown();
-            Controllers.shutdown();
-            Platform.exit();
-        });
+        stopApplication(true);
     }
 
+    /// Stops the launcher after a hidden game session without immediately closing diagnostic windows.
     public static void stopWithoutPlatform() {
         LOG.info("Stopping application without JavaFX Toolkit.\n" + StringUtils.getStackTrace(Thread.currentThread().getStackTrace()));
 
         runInFX(() -> {
-            if (Controllers.getStage() == null)
+            if (hasDiagnosticWindows()) {
+                waitForDiagnosticWindows();
                 return;
-            Controllers.getStage().close();
+            }
+
+            stopApplication(false);
+        });
+    }
+
+    /// Cleans up launcher resources and terminates the JVM once.
+    ///
+    /// @param exitPlatform whether to shut down the JavaFX toolkit before exiting
+    private static void stopApplication(boolean exitPlatform) {
+        runInFX(() -> {
+            if (!EXITING.compareAndSet(false, true))
+                return;
+
+            Optional.ofNullable(Controllers.getStage()).ifPresent(Stage::close);
             Schedulers.shutdown();
             Controllers.shutdown();
-            Lang.executeDelayed(System::gc, TimeUnit.SECONDS, 5, true);
+            SettingsManager.shutdown();
+            if (exitPlatform)
+                Platform.exit();
+            EntryPoint.exit(0);
         });
+    }
+
+    /// Returns whether a crash or game-log window remains visible.
+    private static boolean hasDiagnosticWindows() {
+        return Window.getWindows().stream().anyMatch(Launcher::isDiagnosticWindow);
+    }
+
+    /// Returns whether a visible window must remain available after a hidden game session.
+    private static boolean isDiagnosticWindow(Window window) {
+        return window.isShowing() && (window instanceof GameCrashWindow || window instanceof LogWindow);
+    }
+
+    /// Registers a close handler for each visible diagnostic window.
+    private static void waitForDiagnosticWindows() {
+        Window.getWindows().stream()
+                .filter(Launcher::isDiagnosticWindow)
+                .forEach(Launcher::waitForDiagnosticWindow);
+    }
+
+    /// Registers one close handler for a diagnostic window.
+    private static void waitForDiagnosticWindow(Window window) {
+        if (!DIAGNOSTIC_WINDOWS_AWAITING_CLOSE.add(window))
+            return;
+
+        EventHandler<WindowEvent> handler = new EventHandler<>() {
+            @Override
+            public void handle(WindowEvent event) {
+                window.removeEventHandler(WindowEvent.WINDOW_HIDDEN, this);
+                DIAGNOSTIC_WINDOWS_AWAITING_CLOSE.remove(window);
+                stopWithoutPlatform();
+            }
+        };
+        window.addEventHandler(WindowEvent.WINDOW_HIDDEN, handler);
     }
 
     /// Sets the process-level AppUserModelID on Windows so the launcher groups correctly on the taskbar.
@@ -385,9 +438,6 @@ public final class Launcher extends Application {
         if (OperatingSystem.CURRENT_OS != OperatingSystem.WINDOWS)
             return;
         if (!NativeUtils.USE_JNA || Shell32.INSTANCE == null)
-            return;
-        @Nullable Path thisJar = JarUtils.thisJarPath();
-        if (thisJar == null || !Files.isRegularFile(thisJar) || !"exe".equalsIgnoreCase(FileUtils.getExtension(thisJar)))
             return;
 
         try {
@@ -593,69 +643,6 @@ public final class Launcher extends Application {
             }
         }
         EntryPoint.exit(1);
-    }
-
-    private static @Nullable Boolean isRootUser() {
-        switch (OperatingSystem.CURRENT_OS) {
-            case WINDOWS -> {
-                WinReg reg = WinReg.INSTANCE;
-
-                if (reg == null)
-                    return null;
-                try {
-                    return reg.exists(WinReg.HKEY.HKEY_USERS, "S-1-5-19");
-                } catch (Exception e) {
-                    LOG.warning("Failed to check Windows administrator privileges", e);
-                    return null;
-                }
-            }
-            case LINUX -> {
-                Path selfStatus = Paths.get("/proc/self/status");
-                if (Files.exists(selfStatus)) {
-                    try (var reader = Files.newBufferedReader(selfStatus)) {
-                        @Nullable String line;
-                        while ((line = reader.readLine()) != null) {
-                            if (line.startsWith("Uid:")) {
-                                String[] parts = line.split("\t");
-                                if (parts.length >= 3) {
-                                    String uid = parts[2].trim();
-                                    return "0".equals(uid);
-                                }
-                            }
-                        }
-                    } catch (Exception e) {
-                        LOG.warning("Failed to read " + selfStatus, e);
-                    }
-                }
-            }
-            case MACOS -> {
-                if (NativeUtils.USE_JNA) {
-                    LibSystem libSystem = LibSystem.INSTANCE;
-                    if (libSystem != null) {
-                        try {
-                            return libSystem.geteuid() == 0;
-                        } catch (Throwable e) {
-                            LOG.warning("Failed to check macOS root privileges", e);
-                            return null;
-                        }
-                    }
-                }
-            }
-        }
-
-        if (OperatingSystem.CURRENT_OS.isUnixLike()) {
-            @Nullable Path id = SystemUtils.which("id");
-            if (id != null) {
-                try {
-                    return "0".equals(SystemUtils.run(id.toString(), "-u").trim());
-                } catch (Exception e) {
-                    LOG.warning("Failed to run id -u", e);
-                    return null;
-                }
-            }
-        }
-
-        return null;
     }
 
     public static final CrashReporter CRASH_REPORTER = new CrashReporter(true);
