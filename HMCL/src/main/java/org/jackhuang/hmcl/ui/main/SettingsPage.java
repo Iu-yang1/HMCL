@@ -18,11 +18,6 @@
 package org.jackhuang.hmcl.ui.main;
 
 import com.jfoenix.controls.JFXButton;
-import javafx.beans.InvalidationListener;
-import javafx.beans.WeakInvalidationListener;
-import javafx.beans.property.ObjectProperty;
-import javafx.beans.property.StringProperty;
-import javafx.css.PseudoClass;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.Label;
@@ -34,10 +29,8 @@ import org.jackhuang.hmcl.Metadata;
 import org.jackhuang.hmcl.task.Schedulers;
 import org.jackhuang.hmcl.ui.Controllers;
 import org.jackhuang.hmcl.ui.FXUtils;
-import org.jackhuang.hmcl.ui.SVG;
 import org.jackhuang.hmcl.ui.construct.*;
 import org.jackhuang.hmcl.ui.construct.MessageDialogPane.MessageType;
-import org.jackhuang.hmcl.upgrade.*;
 import org.jackhuang.hmcl.util.Lang;
 import org.jackhuang.hmcl.util.StringUtils;
 import org.jackhuang.hmcl.util.i18n.I18n;
@@ -54,7 +47,6 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.zip.GZIPInputStream;
@@ -66,9 +58,6 @@ import static org.jackhuang.hmcl.util.i18n.I18n.i18n;
 import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 public final class SettingsPage extends ScrollPane {
-    @SuppressWarnings("FieldCanBeLocal")
-    private final InvalidationListener updateListener;
-
     public SettingsPage() {
         this.setFitToWidth(true);
 
@@ -78,98 +67,6 @@ public final class SettingsPage extends ScrollPane {
         FXUtils.smoothScrolling(this);
 
         {
-            ComponentList updatePaneList = new ComponentList();
-            {
-                ObjectProperty<UpdateChannel> updateChannel;
-                {
-
-                    JFXButton updateButton = FXUtils.newToggleButton4(SVG.UPDATE, 20);
-                    updateButton.setOnAction(e -> onUpdate());
-                    updateButton.setPadding(Insets.EMPTY);
-                    FXUtils.installFastTooltip(updateButton, i18n("update.tooltip"));
-
-                    var updatePane = new LineSelectButton<UpdateChannel>() {
-
-                        {
-                            getStyleClass().add("update-pane");
-                            setNode(IDX_TRAILING, updateButton);
-                        }
-
-                        @Override
-                        protected int getTrailingTextIndex() {
-                            return LineComponent.IDX_TRAILING + 1;
-                        }
-                    };
-                    updateChannel = updatePane.valueProperty();
-                    updatePane.setTitle(i18n("update"));
-                    updatePane.setValue(UpdateChannel.getChannel());
-
-                    updatePane.setNullSafeConverter(channel -> i18n("update.channel." + channel.channelName));
-                    updatePane.setItems(List.of(UpdateChannel.STABLE, UpdateChannel.DEVELOPMENT));
-                    updatePane.setDescriptionConverter(channel -> i18n("update.note." + channel.channelName));
-
-                    final StringProperty lblUpdateSubProperty = updatePane.subtitleProperty();
-
-                    {
-                        updateListener = any -> {
-                            boolean outdated = UpdateChecker.isOutdated();
-
-                            updateButton.setVisible(outdated);
-                            updateButton.setManaged(outdated);
-                            updatePane.pseudoClassStateChanged(PseudoClass.getPseudoClass("active"), outdated);
-
-                            if (outdated) {
-                                lblUpdateSubProperty.set(i18n("update.newest_version", UpdateChecker.getLatestVersion().version()));
-                            } else if (UpdateChecker.isCheckingUpdate()) {
-                                lblUpdateSubProperty.set(i18n("update.checking"));
-                            } else if (UpdateChecker.errorProperty().get() != null) {
-                                Throwable t = UpdateChecker.errorProperty().get();
-                                if (t instanceof SelfVerificationException) {
-                                    lblUpdateSubProperty.set(i18n("update.unverified"));
-                                } else {
-                                    String msg = t.getClass().getSimpleName() + ": " + t.getLocalizedMessage();
-                                    lblUpdateSubProperty.set(i18n("update.check_failed", msg));
-                                }
-                            } else {
-                                lblUpdateSubProperty.set(i18n("update.latest"));
-                            }
-                        };
-                        UpdateChecker.latestVersionProperty().addListener(new WeakInvalidationListener(updateListener));
-                        UpdateChecker.outdatedProperty().addListener(new WeakInvalidationListener(updateListener));
-                        UpdateChecker.checkingUpdateProperty().addListener(new WeakInvalidationListener(updateListener));
-                        UpdateChecker.errorProperty().addListener(new WeakInvalidationListener(updateListener));
-                        updateListener.invalidated(null);
-                    }
-
-                    updatePaneList.getContent().add(updatePane);
-                }
-
-                {
-                    LineToggleButton previewPane = new LineToggleButton();
-                    previewPane.setTitle(i18n("update.preview"));
-                    previewPane.setSubtitle(i18n("update.preview.subtitle"));
-                    previewPane.selectedProperty().bindBidirectional(settings().acceptPreviewUpdateProperty());
-
-                    InvalidationListener checkUpdateListener = e -> {
-                        UpdateChecker.requestCheckUpdate(updateChannel.get(), previewPane.isSelected());
-                    };
-                    updateChannel.addListener(checkUpdateListener);
-                    previewPane.selectedProperty().addListener(checkUpdateListener);
-
-                    updatePaneList.getContent().add(previewPane);
-                }
-
-                {
-                    LineToggleButton disableAutoShowUpdateDialogPane = new LineToggleButton();
-                    disableAutoShowUpdateDialogPane.setTitle(i18n("update.disable_auto_show_update_dialog"));
-                    disableAutoShowUpdateDialogPane.setSubtitle(i18n("update.disable_auto_show_update_dialog.subtitle"));
-                    disableAutoShowUpdateDialogPane.selectedProperty().bindBidirectional(settings().disableAutoShowUpdateDialogProperty());
-                    updatePaneList.getContent().add(disableAutoShowUpdateDialogPane);
-                }
-
-                rootPane.getChildren().addAll(ComponentList.createComponentListTitle(i18n("update")), updatePaneList);
-            }
-
             {
                 ComponentList languagePaneList = new ComponentList();
 
@@ -259,14 +156,6 @@ public final class SettingsPage extends ScrollPane {
 
     private void openLogFolder() {
         FXUtils.openFolder(LOG.getLogFile().getParent());
-    }
-
-    private void onUpdate() {
-        RemoteVersion target = UpdateChecker.getLatestVersion();
-        if (target == null) {
-            return;
-        }
-        UpdateHandler.updateFrom(target);
     }
 
     private static String getEntryName(Set<String> entryNames, String name) {
