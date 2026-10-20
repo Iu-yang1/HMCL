@@ -28,7 +28,6 @@ import java.time.Duration;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 
-
 @NotNullByDefault
 public final class RegionUtils {
 
