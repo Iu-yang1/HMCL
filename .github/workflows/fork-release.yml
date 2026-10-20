@@ -46,12 +46,16 @@ jobs:
 
             unzip -tq "$zip_path" > /dev/null
             unzip -q "$zip_path" -d "$folder"
-            mapfile -d '' matches < <(find "$folder" -type f -name "$filename" -print0)
+            # upload-artifact@v7 may store a single file under a normalized
+            # internal path that differs from the artifact's display name.
+            mapfile -d '' matches < <(find "$folder" -type f -print0)
             if [[ "${#matches[@]}" -ne 1 ]]; then
-              echo "::error::Expected exactly one $filename in artifact $artifact_id"
+              echo "::error::Expected one file in artifact $artifact_id, found ${#matches[@]}"
+              find "$folder" -maxdepth 4 -type f -printf '%P\n'
               exit 1
             fi
             cp -- "${matches[0]}" "dist/$filename"
+            test -s "dist/$filename"
           done
 
           unzip -tq "dist/HMCL-3.17.unofficial-3cb91d3.jar" > /dev/null
