@@ -78,15 +78,19 @@ import org.jetbrains.annotations.Unmodifiable;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.lang.ref.SoftReference;
 import java.lang.ref.WeakReference;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
 import java.util.Objects;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Predicate;
 
@@ -101,6 +105,7 @@ import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 public final class ModListPage extends ListPageBase<ModListPage.ModInfoObject> implements PageAware {
     private final ReentrantLock lock = new ReentrantLock();
     private final WeakListenerHolder listenerHolder = new WeakListenerHolder();
+    private final ConcurrentMap<Object, SoftReference<@Nullable CompletableFuture<Image>>> icons = new ConcurrentHashMap<>();
 
     /// Name of the file in the instance mods directory holding pinned mod file names, one per line.
     ///
@@ -117,6 +122,20 @@ public final class ModListPage extends ListPageBase<ModListPage.ModInfoObject> i
     private @Nullable HMCLGameInstance gameInstance;
 
     final EnumSet<ModLoaderType> supportedLoaders = EnumSet.noneOf(ModLoaderType.class);
+
+    private record IconKey(Path file, long size, long lastModified, ModLoaderType loader) { }
+
+    private static IconKey iconKeyOf(LocalModFile mod) {
+        Path file = mod.getFile();
+        try {
+            BasicFileAttributes a = Files.readAttributes(file, BasicFileAttributes.class);
+            return new IconKey(file, a.size(), a.lastModifiedTime().toMillis(), mod.getModLoaderType());
+        } catch (IOException e) {
+            return new IconKey(file, -1, -1, mod.getModLoaderType());
+        }
+    }
+
+    private record LoadedMods(List<ModInfoObject> items, Set<Object> iconKeys) { }
 
     /// Creates a mod list that reloads when `instanceContext` changes.
     ///
@@ -172,15 +191,19 @@ public final class ModListPage extends ListPageBase<ModListPage.ModInfoObject> i
                 modManager.refresh();
                 Set<String> pins = readPinnedFiles(modManager.getDirectory());
                 pinnedFiles = pins;
-                return modManager.getLocalFiles().stream()
-                        .map(file -> new ModInfoObject(file, pins.contains(getPinnedFileName(file.getFile()))))
-                        .toList();
+                Set<Object> keys = new HashSet<>();
+                List<ModInfoObject> items = modManager.getLocalFiles().stream().map(file -> {
+                    IconKey key = iconKeyOf(file);
+                    keys.add(key);
+                    return new ModInfoObject(file, pins.contains(getPinnedFileName(file.getFile())), icons, key);
+                }).toList();
+                return new LoadedMods(items, keys);
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             } finally {
                 lock.unlock();
             }
-        }, Schedulers.io()).whenCompleteAsync((list, exception) -> {
+        }, Schedulers.io()).whenCompleteAsync((loaded, exception) -> {
             if (this.modManager != modManager) {
                 return;
             }
@@ -189,7 +212,8 @@ public final class ModListPage extends ListPageBase<ModListPage.ModInfoObject> i
             supportedLoaders.addAll(modManager.getSupportedLoaders());
 
             if (exception == null) {
-                getItems().setAll(list);
+                icons.keySet().retainAll(loaded.iconKeys());
+                getItems().setAll(loaded.items());
             } else {
                 LOG.warning("Failed to load mods", exception);
                 getItems().clear();
@@ -683,13 +707,14 @@ public final class ModListPage extends ListPageBase<ModListPage.ModInfoObject> i
 
         private final ItemPropertyAsyncCache<Image, ModInfoObject> iconCache;
 
-        ModInfoObject(LocalModFile localModFile, boolean pinned) {
+        ModInfoObject(LocalModFile localModFile, boolean pinned,
+                      ConcurrentMap<Object, SoftReference<@Nullable CompletableFuture<Image>>> icons, Object key) {
             this.localModFile = localModFile;
             this.projectInfo = AddonProjectInfoRegistry.MOD.getInfo(localModFile.getId(), localModFile.getName());
             this.pinnedFileName = getPinnedFileName(localModFile.getFile());
             this.pinned = pinned;
 
-            this.iconCache = new ItemPropertyAsyncCache.Soft<>(this, this::loadIcon, this::getDefaultIcon);
+            this.iconCache = new ItemPropertyAsyncCache.Shared<>(this, icons, key, this::loadIcon, this::getDefaultIcon);
         }
 
         public LocalModFile getModInfo() {
