@@ -1283,6 +1283,7 @@ public final class LauncherHelper {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
+            flushPendingFxEvents();
 
             runInFX(() -> exited.set(true));
 
@@ -1304,10 +1305,66 @@ public final class LauncherHelper {
 
             if (exitType != ExitType.NORMAL) {
                 launcherHelper.gameInstance.markLaunchedAbnormally();
+                revokeJavaMismatchAcknowledgement();
                 runLater(() -> new GameCrashWindow(process, exitType, launcherHelper.gameInstance, launchOptions, logs).show());
             }
 
             launcherHelper.checkExit();
+        }
+
+        /// Revokes the accepted Java version mismatch when the crash was actually caused by a
+        /// Java version mismatch, so the next launch warns the user again.
+        ///
+        /// Crashes from unrelated causes leave the acknowledgement intact: the user accepted
+        /// the risk and it did not materialise, so asking again would be nagging.
+        ///
+        /// The acknowledgement is stored as {@code actualMajor:expectedMajor} rather than a
+        /// flag, so a change of either version (a newer Java, an updated instance) asks again
+        /// instead of staying silent forever.
+        private void revokeJavaMismatchAcknowledgement() {
+            int[] accepted = parseJavaMismatchAcknowledgement(launcherHelper.gameInstance);
+            // Nothing to revoke. This is also the common case, and it avoids running the
+            // crash analysis on every launch for users who never dismissed the warning.
+            if (accepted == null)
+                return;
+
+            // accepted[0] is the runtime in use, accepted[1] the one the instance expects.
+            boolean acceptedNewerRuntime = accepted[0] > accepted[1];
+
+            String rawLog;
+            lock.lock();
+            try {
+                rawLog = logs.stream().map(Log::getLog).collect(Collectors.joining("\n"));
+            } finally {
+                lock.unlock();
+            }
+
+            boolean causedByJava = CrashReportAnalyzer.analyze(rawLog).stream()
+                    .map(CrashReportAnalyzer.Result::rule)
+                    .anyMatch(rule -> revokesAcknowledgement(rule, acceptedNewerRuntime));
+
+            if (causedByJava)
+                writeJavaMismatchAcknowledgement(launcherHelper.gameInstance, "");
+        }
+
+        /// Waits until every task queued on the JavaFX application thread so far has run.
+        ///
+        /// [javafx.application.Platform#runLater] executes tasks in submission order, so a
+        /// task submitted now runs after every task submitted before it.
+        ///
+        /// `javafx.application.Platform` is spelled out because the on-demand import of
+        /// `org.jackhuang.hmcl.util.platform` already owns the simple name `Platform` here.
+        private void flushPendingFxEvents() {
+            if (javafx.application.Platform.isFxApplicationThread())
+                return;
+
+            CountDownLatch latch = new CountDownLatch(1);
+            runLater(latch::countDown);
+            try {
+                latch.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
 
     }
