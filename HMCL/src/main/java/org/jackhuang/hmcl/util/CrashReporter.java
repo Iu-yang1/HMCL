@@ -99,7 +99,9 @@ public final class CrashReporter implements Thread.UncaughtExceptionHandler {
             Platform.runLater(() -> {
                 if (checkThrowable(e)) {
                     if (showCrashWindow) {
-                        new CrashWindow(report).show();
+                        CrashWindow crashWindow = CrashWindow.getInstance();
+                        crashWindow.addCrashReport(report);
+                        crashWindow.show();
                     }
                 }
             });
@@ -107,7 +109,6 @@ public final class CrashReporter implements Thread.UncaughtExceptionHandler {
             LOG.error("Unable to handle uncaught exception", handlingException);
         }
 
-        SettingsManager.shutdown();
-        LOG.shutdown();
+        // Keep the JavaFX runtime alive so the shared crash window can display further errors.
     }
 }
