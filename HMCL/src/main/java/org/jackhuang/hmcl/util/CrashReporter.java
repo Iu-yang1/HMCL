@@ -21,7 +21,6 @@ import javafx.application.Platform;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Alert.AlertType;
 import org.jackhuang.hmcl.countly.CrashReport;
-import org.jackhuang.hmcl.setting.SettingsManager;
 import org.jackhuang.hmcl.ui.CrashWindow;
 
 import static org.jackhuang.hmcl.util.Pair.pair;

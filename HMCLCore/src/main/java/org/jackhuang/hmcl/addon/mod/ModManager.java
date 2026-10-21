@@ -84,6 +84,7 @@ public final class ModManager extends LocalAddonManager<LocalModFile> {
                 metadata.name(), metadata.description(), metadata.authors(), metadata.version(),
                 metadata.gameVersion(), metadata.url(), metadata.logoPath());
     }
+
     private final HashMap<Pair<String, ModLoaderType>, LocalMod> localMods = new HashMap<>();
     private final EnumSet<ModLoaderType> supportedLoaders = EnumSet.noneOf(ModLoaderType.class);
     private GameComponentAnalyzer analyzer;
