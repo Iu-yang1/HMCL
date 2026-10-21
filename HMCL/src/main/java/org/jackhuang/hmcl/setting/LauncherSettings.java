@@ -219,6 +219,14 @@ public final class LauncherSettings extends ObservableSetting implements JsonSch
         return disableAprilFools;
     }
 
+    /// User preference for saving custom game icons.
+    @SerializedName("saveCustomGameIcons")
+    private final ObjectProperty<TriPreference> saveCustomGameIcons = new SimpleObjectProperty<>(TriPreference.CONFIRM_EACH_TIME);
+
+    public ObjectProperty<TriPreference> saveCustomGameIconsProperty() {
+        return saveCustomGameIcons;
+    }
+
     /// Display order used by instance management and the launcher's instance switchers.
     @SerializedName("instanceSortType")
     private final ObjectProperty<InstanceSortType> instanceSortType = new RawPreservingObjectProperty<>(InstanceSortType.DEFAULT) {
