@@ -225,7 +225,8 @@ public final class Controllers {
         stage.setOnCloseRequest(event -> Launcher.stopApplication());
         FXUtils.setIcon(stage);
         stage.setTitle(Metadata.FULL_TITLE);
-        WindowsNativeUtils.installWindowsAppUserModelRelaunchProperties(stage);
+        // JavaFX's stage icon is authoritative; invalid EXE relaunch icon resources
+        // must not override the running taskbar icon.
     }
 
     /// Initializes the main application stage, scene graph, and background services.
