@@ -34,6 +34,7 @@ import org.jetbrains.annotations.Unmodifiable;
 
 import java.io.IOException;
 import java.nio.file.*;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
 
 import static org.jackhuang.hmcl.util.Pair.pair;
@@ -67,6 +68,22 @@ public final class ModManager extends LocalAddonManager<LocalModFile> {
     }
 
     private String gameVersion;
+
+    // Cache only parsed metadata, not LocalModFile objects, whose constructors register manager state.
+    private record ParsedMetadata(String id, ModLoaderType loader, String name,
+                                  LocalAddonFile.Description description, String authors,
+                                  String version, String gameVersion, String url, String logoPath) { }
+
+    private record CacheEntry(long size, long modified, Set<ModLoaderType> loaders, ParsedMetadata data) { }
+
+    // All accesses occur under this manager's lock.
+    private final Map<Path, CacheEntry> parseCache = new HashMap<>();
+
+    private LocalModFile restoreCachedMod(Path file, ParsedMetadata metadata) {
+        return new LocalModFile(this, getLocalMod(metadata.id(), metadata.loader()), file,
+                metadata.name(), metadata.description(), metadata.authors(), metadata.version(),
+                metadata.gameVersion(), metadata.url(), metadata.logoPath());
+    }
     private final HashMap<Pair<String, ModLoaderType>, LocalMod> localMods = new HashMap<>();
     private final EnumSet<ModLoaderType> supportedLoaders = EnumSet.noneOf(ModLoaderType.class);
     private GameComponentAnalyzer analyzer;
@@ -143,6 +160,25 @@ public final class ModManager extends LocalAddonManager<LocalModFile> {
 
         Set<ModLoaderType> modLoaderTypes = instance.getModLoaders();
 
+        // Preserve registry semantics by re-creating the LocalModFile from immutable metadata.
+        // The loader set is part of the cache identity: switching instances must not reuse
+        // a parser result selected for a different mod-loader combination.
+        BasicFileAttributes attributes = null;
+        try {
+            attributes = Files.readAttributes(file, BasicFileAttributes.class);
+            CacheEntry cached = parseCache.get(file);
+            if (attributes.isRegularFile() && cached != null
+                    && cached.size() == attributes.size()
+                    && cached.modified() == attributes.lastModifiedTime().toMillis()
+                    && cached.loaders().equals(modLoaderTypes)) {
+                LocalModFile restored = restoreCachedMod(file, cached.data());
+                if (!restored.isOld()) localFiles.add(restored);
+                return;
+            }
+        } catch (IOException ignored) {
+            // Keep the original failure-handling path, which creates an UNKNOWN entry.
+        }
+
         var supportedReaders = new ArrayList<ModMetadataReader>();
         var unsupportedReaders = new ArrayList<ModMetadataReader>();
 
@@ -178,6 +214,16 @@ public final class ModManager extends LocalAddonManager<LocalModFile> {
             }
         } catch (Exception e) {
             LOG.warning("Failed to open mod file " + file, e);
+        }
+
+        if (modInfo != null && attributes != null && attributes.isRegularFile()) {
+            parseCache.put(file, new CacheEntry(attributes.size(), attributes.lastModifiedTime().toMillis(),
+                    Set.copyOf(modLoaderTypes), new ParsedMetadata(modInfo.getId(), modInfo.getModLoaderType(),
+                    modInfo.getName(), modInfo.getDescription(), modInfo.getAuthors(), modInfo.getVersion(),
+                    modInfo.getGameVersion(), modInfo.getUrl(), modInfo.getLogoPath())));
+        } else {
+            // A broken or incompletely written archive may become valid later.
+            parseCache.remove(file);
         }
 
         if (modInfo == null) {
@@ -223,6 +269,7 @@ public final class ModManager extends LocalAddonManager<LocalModFile> {
 
             analyze();
 
+            Set<Path> visited = new HashSet<>();
             boolean supportSubfolders = analyzer.has(GameComponentType.FORGE)
                     || analyzer.has(GameComponentType.QUILT)
                     || analyzer.has(GameComponentType.CLEANROOM)
@@ -234,16 +281,19 @@ public final class ModManager extends LocalAddonManager<LocalModFile> {
                         if (supportSubfolders && Files.isDirectory(subitem) && !".connector".equalsIgnoreCase(subitem.getFileName().toString())) {
                             try (DirectoryStream<Path> subitemDirectoryStream = Files.newDirectoryStream(subitem)) {
                                 for (Path subsubitem : subitemDirectoryStream) {
+                                    visited.add(subsubitem);
                                     addModInfo(subsubitem);
                                 }
                             }
                         } else {
+                            visited.add(subitem);
                             addModInfo(subitem);
                         }
                     }
                 }
             }
 
+            parseCache.keySet().retainAll(visited);
             updateSupportedLoaders();
 
             loaded = true;
